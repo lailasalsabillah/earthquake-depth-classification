@@ -16,29 +16,20 @@ def load_dataset():
 df, err = load_dataset()
 
 if df is None:
-    st.error("Gagal memuat `dataset_gempa.csv`. Pastikan file tersebut sudah diupload.")
-    st.caption(f"Detail error: {err}")
+    st.error("Dataset tidak ditemukan.")
 else:
-    if df.empty:
-        st.warning("Dataset kosong. Tidak ada titik yang dapat dipetakan.")
-    else:
-        center_lat = df["latitude"].mean()
-        center_lon = df["longitude"].mean()
+    center_lat = df["latitude"].mean()
+    center_lon = df["longitude"].mean()
 
-        m = folium.Map(location=[center_lat, center_lon], zoom_start=5)
+    m = folium.Map(location=[center_lat, center_lon], zoom_start=5)
 
-        for _, row in df.iterrows():
-            depth = row.get("depth", 0)
-            mag = row.get("mag", 0)
-            popup = f"Mag: {mag}, Depth: {depth} km"
+    for _, row in df.iterrows():
+        folium.CircleMarker(
+            location=[row["latitude"], row["longitude"]],
+            radius=3,
+            popup=f"Mag: {row['mag']} | Depth: {row['depth']} km",
+            color="red",
+            fill=True
+        ).add_to(m)
 
-            folium.CircleMarker(
-                location=[row["latitude"], row["longitude"]],
-                radius=3,
-                popup=popup,
-                color="red",
-                fill=True,
-                fill_opacity=0.6
-            ).add_to(m)
-
-        st_folium(m, width=800, height=500)
+    st_folium(m, height=500, width=800)
