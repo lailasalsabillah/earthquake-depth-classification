@@ -2,131 +2,63 @@ import streamlit as st
 import numpy as np
 import pandas as pd
 import joblib
-
-try:
-    from tensorflow.keras.models import load_model
-    TENSORFLOW_AVAILABLE = True
-except Exception:
-    TENSORFLOW_AVAILABLE = False
+from tensorflow.keras.models import load_model
 
 st.title("🔍 Prediksi Kedalaman Gempa")
 
-st.write(
-    "Masukkan parameter gempa di bawah ini untuk memprediksi apakah gempa termasuk "
-    "**Shallow**, **Intermediate**, atau **Deep**."
-)
-
-# =========================
-# INPUT FORM
-# =========================
-col1, col2 = st.columns(2)
-
-with col1:
-    latitude = st.number_input("Latitude", -15.0, 15.0, -6.5, help="Lintang episenter gempa.")
-    longitude = st.number_input("Longitude", 90.0, 150.0, 107.0, help="Bujur episenter gempa.")
-    mag = st.number_input("Magnitudo (Mw)", 3.0, 9.5, 5.0, help="Kekuatan gempa (skala Mw).")
-    gap = st.number_input("Gap (derajat)", 0, 360, 80, help="Sudut celah distribusi stasiun.")
-
-with col2:
-    dmin = st.number_input("Dmin (derajat)", 0.0, 30.0, 2.1, help="Jarak minimum ke stasiun terdekat.")
-    rms = st.number_input("RMS Residual", 0.0, 3.0, 0.7, help="RMS residual time.")
-    horizontalError = st.number_input("Horizontal Error (km)", 0.0, 50.0, 8.0)
-    depthError = st.number_input("Depth Error (km)", 0.0, 30.0, 6.0)
-    magError = st.number_input("Magnitude Error", 0.0, 1.0, 0.12)
-    year = st.number_input("Tahun", 2000, 2100, 2023)
-
-# =========================
-# LOAD MODELS
-# =========================
+# Load model
 @st.cache_resource
-def load_scaler_and_models():
-    scaler = None
-    xgb_model = None
-    lstm_model = None
-    scaler_err = xgb_err = lstm_err = None
-
+def load_all_models():
     try:
         scaler = joblib.load("models/scaler.pkl")
-    except Exception as e:
-        scaler_err = str(e)
-
-    try:
         xgb_model = joblib.load("models/xgb_depth_class.pkl")
+        lstm_model = load_model("models/lstm_depth_class.keras")
+        return scaler, xgb_model, lstm_model, None
     except Exception as e:
-        xgb_err = str(e)
+        return None, None, None, str(e)
 
-    if TENSORFLOW_AVAILABLE:
-        try:
-            lstm_model = load_model("models/lstm_depth_class.keras")
-        except Exception as e:
-            lstm_err = str(e)
-    else:
-        lstm_err = "TensorFlow tidak tersedia di environment ini."
+scaler, xgb_model, lstm_model, err = load_all_models()
 
-    return scaler, xgb_model, lstm_model, scaler_err, xgb_err, lstm_err
+if err:
+    st.error("Model tidak ditemukan! Pastikan semua file model berada di folder `models/`.")
+    st.code(err)
+else:
+    st.success("Model berhasil dimuat.")
 
+    st.subheader("Masukkan Parameter Gempa:")
 
-scaler, xgb_model, lstm_model, scaler_err, xgb_err, lstm_err = load_scaler_and_models()
+    col1, col2, col3 = st.columns(3)
 
-label_map = {
-    0: "Shallow (< 70 km)",
-    1: "Intermediate (70–300 km)",
-    2: "Deep (> 300 km)"
-}
+    with col1:
+        latitude = st.number_input("Latitude", -90.0, 90.0, 0.0)
+        longitude = st.number_input("Longitude", -180.0, 180.0, 0.0)
+        mag = st.number_input("Magnitude", 0.0, 10.0, 5.0)
 
-# =========================
-# PREDICTION
-# =========================
-if st.button("🚀 Jalankan Prediksi"):
+    with col2:
+        gap = st.number_input("Gap", 0.0, 360.0, 50.0)
+        dmin = st.number_input("Dmin", 0.0, 1000.0, 10.0)
+        rms = st.number_input("RMS", 0.0, 10.0, 1.0)
 
-    data = np.array([[
-        latitude, longitude, mag, gap, dmin, rms,
-        horizontalError, depthError, magError, year
-    ]])
+    with col3:
+        h_err = st.number_input("Horizontal Error", 0.0, 100.0, 5.0)
+        d_err = st.number_input("Depth Error", 0.0, 100.0, 5.0)
+        year = st.number_input("Tahun", 1900, 2100, 2023)
 
-    df_input = pd.DataFrame(data, columns=[
-        "latitude", "longitude", "mag", "gap", "dmin", "rms",
-        "horizontalError", "depthError", "magError", "year"
-    ])
+    if st.button("🔍 Prediksi Kedalaman Gempa"):
 
-    if scaler is None:
-        st.error("Scaler belum tersedia. Pastikan file `models/scaler.pkl` sudah diupload.\n\n"
-                 f"Detail error: {scaler_err}")
-    else:
-        scaled = scaler.transform(data)
+        features = np.array([[latitude, longitude, mag, gap, dmin, rms, h_err, d_err, year]])
+        scaled = scaler.transform(features)
 
-        col_pred1, col_pred2 = st.columns(2)
+        lstm_input = scaled.reshape((scaled.shape[0], 1, scaled.shape[1]))
 
-        # XGBoost prediction
-        with col_pred1:
-            st.subheader("🧠 Model XGBoost")
-            if xgb_model is None:
-                st.warning("Model XGBoost belum tersedia. Upload `models/xgb_depth_class.pkl`.")
-                if xgb_err:
-                    st.caption(f"Detail: {xgb_err}")
-            else:
-                xgb_pred = xgb_model.predict(scaled)[0]
-                st.success(f"Prediksi: **{label_map.get(int(xgb_pred), 'Tidak diketahui')}**")
+        xgb_pred = xgb_model.predict(scaled)[0]
+        lstm_pred = np.argmax(lstm_model.predict(lstm_input), axis=1)[0]
 
-        # LSTM prediction
-        with col_pred2:
-            st.subheader("🧠 Model LSTM")
-            if not TENSORFLOW_AVAILABLE:
-                st.warning("TensorFlow tidak terinstal di environment ini.")
-            elif lstm_model is None:
-                st.warning("Model LSTM belum tersedia. Upload `models/lstm_depth_class.keras`.")
-                if lstm_err:
-                    st.caption(f"Detail: {lstm_err}")
-            else:
-                lstm_input = scaled.reshape((scaled.shape[0], 1, scaled.shape[1]))
-                lstm_prob = lstm_model.predict(lstm_input)
-                lstm_class = int(np.argmax(lstm_prob, axis=1)[0])
-                st.success(f"Prediksi: **{label_map.get(lstm_class, 'Tidak diketahui')}**")
+        label_map = {
+            0: "Shallow (<70 km)",
+            1: "Intermediate (70–300 km)",
+            2: "Deep (>300 km)"
+        }
 
-        st.markdown("---")
-        st.subheader("📄 Data Input")
-        st.dataframe(df_input, use_container_width=True)
-
-        # Simple bar chart magnitude vs dummy depth category index
-        st.subheader("📈 Visualisasi Magnitudo")
-        st.bar_chart(pd.DataFrame({"Magnitude": [mag]}))
+        st.success(f"🎯 **XGBoost Prediction:** {label_map[xgb_pred]}")
+        st.info(f"🤖 **LSTM Prediction:** {label_map[lstm_pred]}")
